@@ -10,11 +10,31 @@ import pandas as pd
 import plotly.graph_objs as go
 import requests
 import scipy.stats as sp
+import numpy as np
+import math
 from HydroErr.HydroErr import metric_names, metric_abbr
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render
 from scipy import integrate
 from tethys_sdk.gizmos import PlotlyView
+
+## global values ##
+watershed = 'none'
+subbasin = 'none'
+comid = 'none'
+nomRiver = 'none'
+nomEstacion = 'none'
+s = None
+simulated_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+simulated_df.set_index('Datetime', inplace=True)
+observed_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+observed_df.set_index('Datetime', inplace=True)
+corrected_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+corrected_df.set_index('Datetime', inplace=True)
+forecast_df =pd.DataFrame({'A' : []})
+fixed_stats = None
+forecast_record = None
+fixed_records = None
 
 
 def home(request):
@@ -31,135 +51,61 @@ def home(request):
 
     return render(request, 'historical_validation_tool_somalia/home.html', context)
 
-def get_discharge_data(request):
+def get_popup_response(request):
     """
-    Get observed data from csv files in Hydroshare
-    """
-
+	get station attributes
+	"""
     get_data = request.GET
+    return_obj = {}
+
+    global watershed
+    global subbasin
+    global comid
+    global nomRiver
+    global nomEstacion
+    global s
+    global simulated_df
+    global observed_df
+    global corrected_df
+    global forecast_df
+    global fixed_stats
+    global forecast_record
+    global fixed_records
+
+    watershed = 'none'
+    subbasin = 'none'
+    comid = 'none'
+    nomRiver = 'none'
+    nomEstacion = 'none'
+    s = None
+    simulated_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+    simulated_df.set_index('Datetime', inplace=True)
+    observed_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+    observed_df.set_index('Datetime', inplace=True)
+    corrected_df = pd.DataFrame([(dt.datetime(1980, 1, 1, 0, 0), 0)], columns=['Datetime', 'Simulated Streamflow'])
+    corrected_df.set_index('Datetime', inplace=True)
+    forecast_df = pd.DataFrame({'A': []})
+    fixed_stats = None
+    forecast_record = None
+    fixed_records = None
 
     try:
-
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_Q = go.Scatter(
-            x=datesDischarge,
-            y=dataDischarge,
-            name='Observed Discharge',
-            line=dict(color='#636efa')
-        )
-
-        layout = go.Layout(title='Observed Streamflow for River {0} at {1}'.format(nomRiver, nomEstacion),
-                           xaxis=dict(title='Dates', ), yaxis=dict(title='Discharge (m<sup>3</sup>/s)',
-                                                                   autorange=True), showlegend=False)
-
-        chart_obj = PlotlyView(go.Figure(data=[observed_Q], layout=layout))
-
-        context = {
-            'gizmo_object': chart_obj,
-        }
-
-        return render(request, 'historical_validation_tool_somalia/gizmo_ajax.html', context)
-
-    except Exception as e:
-        print(str(e))
-        return JsonResponse({'error': 'No observed data found for the selected station.'})
-
-def get_simulated_data(request):
-    """
-    Get simulated data from api
-    """
-
-    try:
-        get_data = request.GET
+        # get station attributes
+        watershed = get_data['watershed']
+        subbasin = get_data['subbasin']
         comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
         nomRiver = get_data['stream']
-
-        # Get Simulated Data
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        # ----------------------------------------------
-        # Chart Section
-        # ----------------------------------------------
-
-        simulated_Q = go.Scatter(
-            name='Simulated Discharge',
-            x=simulated_df.index,
-            y=simulated_df.iloc[:, 0].values,
-            line=dict(color='#ef553b')
-        )
-
-        layout = go.Layout(
-            title="Simulated Streamflow for River {0} at {1}".format(nomRiver, nomEstacion),
-            xaxis=dict(title='Date', ), yaxis=dict(title='Discharge (m<sup>3</sup>/s)'),
-        )
-
-        chart_obj = PlotlyView(go.Figure(data=[simulated_Q], layout=layout))
-
-        context = {
-            'gizmo_object': chart_obj,
-        }
-
-        return render(request, 'historical_validation_tool_somalia/gizmo_ajax.html', context)
-
-    except Exception as e:
-        print(str(e))
-        return JsonResponse({'error': 'No simulated data found for the selected station.'})
-
-def get_simulated_bc_data(request):
-    """
-    Calculate corrected simulated data
-    """
-    get_data = request.GET
-
-    try:
-        comid = get_data['streamcomid']
         nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
 
         '''Get Simulated Data'''
-
         simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
         # Removing Negative Values
         simulated_df[simulated_df < 0] = 0
-
         simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
         simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
+        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index, columns=['Simulated Streamflow'])
 
         '''Get Observed Data'''
-
         name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
         name_file = name_file.replace(" ", "_")
 
@@ -180,36 +126,34 @@ def get_simulated_bc_data(request):
         observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
 
         '''Correct the Bias in Sumulation'''
-
         corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
-        # ----------------------------------------------
-        # Chart Section
-        # ----------------------------------------------
+        '''Get Forecasts'''
+        forecast_df = geoglows.streamflow.forecast_stats(comid, return_format='csv')
+        # Removing Negative Values
+        forecast_df[forecast_df < 0] = 0
 
-        corrected_Q = go.Scatter(
-            name='Corrected Simulated Discharge',
-            x=corrected_df.index,
-            y=corrected_df.iloc[:, 0].values,
-            line=dict(color='#00cc96')
-        )
+        '''Correct Bias Forecasts'''
+        fixed_stats = geoglows.bias.correct_forecast(forecast_df, simulated_df, observed_df)
 
-        layout = go.Layout(
-            title="Corrected Simulated Streamflow for River {0} at {1}".format(nomRiver, nomEstacion),
-            xaxis=dict(title='Date', ), yaxis=dict(title='Discharge (m<sup>3</sup>/s)'),
-        )
+        '''Get Forecasts Records'''
+        try:
+            forecast_record = geoglows.streamflow.forecast_records(comid)
+            forecast_record[forecast_record < 0] = 0
+            forecast_record = forecast_record.loc[forecast_record.index >= pd.to_datetime(forecast_df.index[0] - dt.timedelta(days=8))]
 
-        chart_obj = PlotlyView(go.Figure(data=[corrected_Q], layout=layout))
+            '''Correct Bias Forecasts Records'''
+            fixed_records = geoglows.bias.correct_forecast(forecast_record, simulated_df, observed_df, use_month=-1)
+            fixed_records = fixed_records.loc[fixed_records.index >= pd.to_datetime(forecast_df.index[0] - dt.timedelta(days=8))]
+        except:
+            print('There is no forecast record')
 
-        context = {
-            'gizmo_object': chart_obj,
-        }
-
-        return render(request, 'historical_validation_tool_somalia/gizmo_ajax.html', context)
+        print("finished get_popup_response")
+        return JsonResponse({})
 
     except Exception as e:
         print(str(e))
-        return JsonResponse({'error': 'No simulated data found for the selected station.'})
+        return JsonResponse({'error': 'No data found for the selected station.'})
 
 def get_hydrographs(request):
     """
@@ -217,52 +161,13 @@ def get_hydrographs(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Plotting Data'''
         observed_Q = go.Scatter(x=observed_df.index, y=observed_df.iloc[:, 0].values, name='Observed', )
@@ -292,50 +197,13 @@ def get_dailyAverages(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
 
@@ -379,52 +247,13 @@ def get_monthlyAverages(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
 
@@ -469,52 +298,13 @@ def get_scatterPlot(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
 
@@ -599,52 +389,13 @@ def get_scatterPlotLogScale(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
 
@@ -703,53 +454,13 @@ def get_volumeAnalysis(request):
     Get historic simulations from ERA Interim
     """
     get_data = request.GET
+    global nomRiver
+    global nomEstacion
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
-
         '''Merge Data'''
 
         merged_df = hd.merge_data(sim_df=simulated_df, obs_df=observed_df)
@@ -812,52 +523,11 @@ def volume_table_ajax(request):
     """Calculates the volumes of the simulated and observed streamflow"""
 
     get_data = request.GET
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
 
@@ -890,13 +560,11 @@ def volume_table_ajax(request):
 
 def make_table_ajax(request):
     get_data = request.GET
+    global simulated_df
+    global observed_df
+    global corrected_df
 
     try:
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
 
         # Indexing the metrics to get the abbreviations
         selected_metric_abbr = get_data.getlist("metrics[]", None)
@@ -962,45 +630,6 @@ def make_table_ajax(request):
         else:
             d1_p_x_bar_p = None
             extra_param_dict['d1_p_x_bar_p'] = d1_p_x_bar_p
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         '''Merge Data'''
         merged_df = hd.merge_data(sim_df=simulated_df, obs_df=observed_df)
@@ -1076,25 +705,94 @@ def get_units_title(unit_type):
 
 def get_time_series(request):
     get_data = request.GET
-    try:
-        # model = get_data['model']
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        units = 'metric'
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
+    global comid
+    global nomRiver
+    global nomEstacion
+    global forecast_df
+    global forecast_record
 
-        '''Get Forecasts'''
-        forecast_df = geoglows.streamflow.forecast_stats(comid, return_format='csv')
-        # Removing Negative Values
-        forecast_df[forecast_df < 0] = 0
-        # Getting forecast record
-        #forecast_record = geoglows.streamflow.forecast_records(comid, return_format='csv')
-        #forecast_ensembles = geoglows.streamflow.forecast_ensembles(comid)
-        #hydroviewer_figure = geoglows.plots.hydroviewer(forecast_record, forecast_df, forecast_ensembles)
+    try:
+
         hydroviewer_figure = geoglows.plots.forecast_stats(stats=forecast_df, titles={'Station': nomRiver + ' at ' + nomEstacion, 'Reach ID': comid})
 
+        x_vals = (forecast_df.index[0], forecast_df.index[len(forecast_df.index) - 1], forecast_df.index[len(forecast_df.index) - 1], forecast_df.index[0])
+        max_visible = max(forecast_df.max())
+
+        '''Getting forecast record'''
+        try:
+            if len(forecast_record.index) > 0:
+                hydroviewer_figure.add_trace(go.Scatter(
+                    name='1st days forecasts',
+                    x=forecast_record.index,
+                    y=forecast_record.iloc[:, 0].values,
+                    line=dict(
+                        color='#FFA15A',
+                    )
+                ))
+
+            if 'x_vals' in locals():
+                x_vals = (forecast_record.index[0], forecast_df.index[len(forecast_df.index) - 1], forecast_df.index[len(forecast_df.index) - 1], forecast_record.index[0])
+            else:
+                x_vals = (forecast_record.index[0], forecast_df.index[len(forecast_df.index) - 1], forecast_df.index[len(forecast_df.index) - 1], forecast_record.index[0])
+                max_visible = max(forecast_record.max(), max_visible)
+
+        except:
+            print('Not forecast record for the selected station')
+
+        '''Getting Return Periods'''
+        try:
+            rperiods = geoglows.streamflow.return_periods(comid)
+
+            r2 = int(rperiods.iloc[0]['return_period_2'])
+
+            colors = {
+                '2 Year': 'rgba(254, 240, 1, .4)',
+                '5 Year': 'rgba(253, 154, 1, .4)',
+                '10 Year': 'rgba(255, 56, 5, .4)',
+                '20 Year': 'rgba(128, 0, 246, .4)',
+                '25 Year': 'rgba(255, 0, 0, .4)',
+                '50 Year': 'rgba(128, 0, 106, .4)',
+                '100 Year': 'rgba(128, 0, 246, .4)',
+            }
+
+            if max_visible > r2:
+                visible = True
+                hydroviewer_figure.for_each_trace(
+                    lambda trace: trace.update(visible=True) if trace.name == "Maximum & Minimum Flow" else (),
+                )
+            else:
+                visible = 'legendonly'
+                hydroviewer_figure.for_each_trace(
+                    lambda trace: trace.update(visible=True) if trace.name == "Maximum & Minimum Flow" else (),
+                )
+
+            def template(name, y, color, fill='toself'):
+                return go.Scatter(
+                    name=name,
+                    x=x_vals,
+                    y=y,
+                    legendgroup='returnperiods',
+                    fill=fill,
+                    visible=visible,
+                    line=dict(color=color, width=0))
+
+            r5 = int(rperiods.iloc[0]['return_period_5'])
+            r10 = int(rperiods.iloc[0]['return_period_10'])
+            r25 = int(rperiods.iloc[0]['return_period_25'])
+            r50 = int(rperiods.iloc[0]['return_period_50'])
+            r100 = int(rperiods.iloc[0]['return_period_100'])
+
+            hydroviewer_figure.add_trace(template('Return Periods', (r100 * 0.05, r100 * 0.05, r100 * 0.05, r100 * 0.05), 'rgba(0,0,0,0)', fill='none'))
+            hydroviewer_figure.add_trace(template(f'2 Year: {r2}', (r2, r2, r5, r5), colors['2 Year']))
+            hydroviewer_figure.add_trace(template(f'5 Year: {r5}', (r5, r5, r10, r10), colors['5 Year']))
+            hydroviewer_figure.add_trace(template(f'10 Year: {r10}', (r10, r10, r25, r25), colors['10 Year']))
+            hydroviewer_figure.add_trace(template(f'25 Year: {r25}', (r25, r25, r50, r50), colors['25 Year']))
+            hydroviewer_figure.add_trace(template(f'50 Year: {r50}', (r50, r50, r100, r100), colors['50 Year']))
+            hydroviewer_figure.add_trace(template(f'100 Year: {r100}', (r100, r100, max(r100 + r100 * 0.05, max_visible), max(r100 + r100 * 0.05, max_visible)),colors['100 Year']))
+
+        except:
+
+            print('There is no return periods for the desired stream')
 
         chart_obj = PlotlyView(hydroviewer_figure)
 
@@ -1109,69 +807,126 @@ def get_time_series(request):
         return JsonResponse({'error': 'No data found for the selected reach.'})
 
 def get_time_series_bc(request):
+
     get_data = request.GET
+    global comid
+    global nomRiver
+    global nomEstacion
+    global corrected_df
+    global forecast_df
+    global fixed_stats
+    global forecast_record
+    global fixed_records
+
     try:
-        # model = get_data['model']
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        units = 'metric'
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
 
-        '''Get Simulated Data'''
+        hydroviewer_figure = geoglows.plots.forecast_stats(stats=fixed_stats, titles={'Station': nomRiver + ' at ' + nomEstacion, 'Reach ID': comid, 'bias_corrected': True})
 
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
+        x_vals = (fixed_stats.index[0], fixed_stats.index[len(fixed_stats.index) - 1], fixed_stats.index[len(fixed_stats.index) - 1], fixed_stats.index[0])
+        max_visible = max(fixed_stats.max())
 
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
+        '''Getting forecast record'''
 
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
+        try:
 
-        simulated_df.index = pd.to_datetime(simulated_df.index)
+            if len(fixed_records.index) > 0:
+                hydroviewer_figure.add_trace(go.Scatter(
+                    name='1st days forecasts',
+                    x=fixed_records.index,
+                    y=fixed_records.iloc[:, 0].values,
+                    line=dict(
+                        color='#FFA15A',
+                    )
+                ))
 
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
+            if 'x_vals' in locals():
+                x_vals = (fixed_records.index[0], fixed_stats.index[len(fixed_stats.index) - 1], fixed_stats.index[len(fixed_stats.index) - 1], fixed_records.index[0])
+            else:
+                x_vals = (fixed_records.index[0], fixed_stats.index[len(fixed_stats.index) - 1], fixed_stats.index[len(fixed_stats.index) - 1], fixed_records.index[0])
 
-        '''Get Observed Data'''
+            max_visible = max(fixed_records.max(), max_visible)
 
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
+        except:
 
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
+            print('There is no forecast record')
 
-        s = requests.get(url, verify=False).content
+        '''Getting Corrected Return Periods'''
+        max_annual_flow = corrected_df.groupby(corrected_df.index.strftime("%Y")).max()
+        mean_value = np.mean(max_annual_flow.iloc[:, 0].values)
+        std_value = np.std(max_annual_flow.iloc[:, 0].values)
 
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
+        return_periods = [100, 50, 25, 10, 5, 2]
 
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
+        def gumbel_1(std: float, xbar: float, rp: int or float) -> float:
+            """
+			Solves the Gumbel Type I probability distribution function (pdf) = exp(-exp(-b)) where b is the covariate. Provide
+			the standard deviation and mean of the list of annual maximum flows. Compare scipy.stats.gumbel_r
+			Args:
+				std (float): the standard deviation of the series
+				xbar (float): the mean of the series
+				rp (int or float): the return period in years
+			Returns:
+				float, the flow corresponding to the return period specified
+			"""
+            # xbar = statistics.mean(year_max_flow_list)
+            # std = statistics.stdev(year_max_flow_list, xbar=xbar)
+            return -math.log(-math.log(1 - (1 / rp))) * std * .7797 + xbar - (.45 * std)
 
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
+        return_periods_values = []
 
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
+        for rp in return_periods:
+            return_periods_values.append(gumbel_1(std_value, mean_value, rp))
 
-        '''Get Forecasts'''
+        d = {'rivid': [comid], 'return_period_100': [return_periods_values[0]], 'return_period_50': [return_periods_values[1]], 'return_period_25': [return_periods_values[2]], 'return_period_10': [return_periods_values[3]], 'return_period_5': [return_periods_values[4]], 'return_period_2': [return_periods_values[5]]}
+        rperiods = pd.DataFrame(data=d)
+        rperiods.set_index('rivid', inplace=True)
 
-        forecast_df = geoglows.streamflow.forecast_stats(comid, return_format='csv')
+        r2 = int(rperiods.iloc[0]['return_period_2'])
 
-        # Removing Negative Values
-        forecast_df[forecast_df < 0] = 0
+        colors = {
+            '2 Year': 'rgba(254, 240, 1, .4)',
+            '5 Year': 'rgba(253, 154, 1, .4)',
+            '10 Year': 'rgba(255, 56, 5, .4)',
+            '20 Year': 'rgba(128, 0, 246, .4)',
+            '25 Year': 'rgba(255, 0, 0, .4)',
+            '50 Year': 'rgba(128, 0, 106, .4)',
+            '100 Year': 'rgba(128, 0, 246, .4)',
+        }
 
-        # Getting forecast record
-        #forecast_record = geoglows.streamflow.forecast_records(comid, return_format='csv')
-        #forecast_ensembles = geoglows.streamflow.forecast_ensembles(comid)
+        if max_visible > r2:
+            visible = True
+            hydroviewer_figure.for_each_trace(
+                lambda trace: trace.update(visible=True) if trace.name == "Maximum & Minimum Flow" else (),
+            )
+        else:
+            visible = 'legendonly'
+            hydroviewer_figure.for_each_trace(
+                lambda trace: trace.update(visible=True) if trace.name == "Maximum & Minimum Flow" else (),
+            )
 
-        '''Correct Forecast'''
-        fixed_stats = geoglows.bias.correct_forecast(forecast_df, simulated_df, observed_df)
-        #fixed_records = geoglows.bias.correct_forecast(forecast_record, simulated_df, observed_df, use_month=-1)
-        #fixed_ensembles = geoglows.bias.correct_forecast(forecast_ensembles, simulated_df, observed_df)
+        def template(name, y, color, fill='toself'):
+            return go.Scatter(
+                name=name,
+                x=x_vals,
+                y=y,
+                legendgroup='returnperiods',
+                fill=fill,
+                visible=visible,
+                line=dict(color=color, width=0))
 
-        #hydroviewer_figure = geoglows.plots.hydroviewer(fixed_records, fixed_stats, fixed_ensembles)
-        hydroviewer_figure = geoglows.plots.forecast_stats(stats=fixed_stats, titles={'Station': nomRiver + ' at ' + nomEstacion, 'Reach ID': comid})
+        r5 = int(rperiods.iloc[0]['return_period_5'])
+        r10 = int(rperiods.iloc[0]['return_period_10'])
+        r25 = int(rperiods.iloc[0]['return_period_25'])
+        r50 = int(rperiods.iloc[0]['return_period_50'])
+        r100 = int(rperiods.iloc[0]['return_period_100'])
+
+        hydroviewer_figure.add_trace(template('Return Periods', (r100 * 0.05, r100 * 0.05, r100 * 0.05, r100 * 0.05), 'rgba(0,0,0,0)', fill='none'))
+        hydroviewer_figure.add_trace(template(f'2 Year: {r2}', (r2, r2, r5, r5), colors['2 Year']))
+        hydroviewer_figure.add_trace(template(f'5 Year: {r5}', (r5, r5, r10, r10), colors['5 Year']))
+        hydroviewer_figure.add_trace(template(f'10 Year: {r10}', (r10, r10, r25, r25), colors['10 Year']))
+        hydroviewer_figure.add_trace(template(f'25 Year: {r25}', (r25, r25, r50, r50), colors['25 Year']))
+        hydroviewer_figure.add_trace(template(f'50 Year: {r50}', (r50, r50, r100, r100), colors['50 Year']))
+        hydroviewer_figure.add_trace(template(f'100 Year: {r100}', (r100, r100, max(r100 + r100 * 0.05, max_visible), max(r100 + r100 * 0.05, max_visible)), colors['100 Year']))
 
         chart_obj = PlotlyView(hydroviewer_figure)
 
@@ -1192,31 +947,11 @@ def get_observed_discharge_csv(request):
     """
 
     get_data = request.GET
+    global observed_df
+    global nomRiver
+    global nomEstacion
 
     try:
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
 
         datesObservedDischarge = observed_df.index.tolist()
         observedDischarge = observed_df.iloc[:, 0].values
@@ -1244,26 +979,13 @@ def get_simulated_discharge_csv(request):
     """
     Get historic simulations from ERA Interim
     """
+    get_data = request.GET
+    global comid
+    global nomRiver
+    global nomEstacion
+    global simulated_df
 
     try:
-        get_data = request.GET
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
 
         pairs = [list(a) for a in zip(simulated_df.index, simulated_df.iloc[:, 0])]
 
@@ -1288,50 +1010,14 @@ def get_simulated_bc_discharge_csv(request):
     """
 
     get_data = request.GET
+    global comid
+    global nomRiver
+    global nomEstacion
+    global observed_df
+    global simulated_df
+    global corrected_df
 
     try:
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Correct the Bias in Sumulation'''
-
-        corrected_df = geoglows.bias.correct_historical(simulated_df, observed_df)
 
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename=corrected_simulated_discharge_{0}_at_{1}.csv'.format(nomRiver, nomEstacion)
@@ -1350,21 +1036,14 @@ def get_forecast_data_csv(request):
     """""
 
     get_data = request.GET
+    global watershed
+    global subbasin
+    global comid
+    global forecast_df
 
     try:
-        # model = get_data['model']
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
 
-        '''Get Forecasts'''
-        forecast_df = geoglows.streamflow.forecast_stats(comid, return_format='csv')
-
-        # Removing Negative Values
-        forecast_df[forecast_df < 0] = 0
-
+        # Writing CSV
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename=streamflow_forecast_{0}_{1}_{2}.csv'.format(watershed, subbasin, comid)
         forecast_df.to_csv(encoding='utf-8', header=True, path_or_buf=response)
@@ -1381,58 +1060,14 @@ def get_forecast_bc_data_csv(request):
     """""
 
     get_data = request.GET
+    global watershed
+    global subbasin
+    global comid
+    global forecast_df
+    global fixed_stats
+
+
     try:
-        # model = get_data['model']
-        watershed = get_data['watershed']
-        subbasin = get_data['subbasin']
-        comid = get_data['streamcomid']
-        units = 'metric'
-        nomEstacion = get_data['stationname']
-        nomRiver = get_data['stream']
-
-        '''Get Simulated Data'''
-
-        simulated_df = geoglows.streamflow.historic_simulation(comid, forcing='era_5', return_format='csv')
-
-        # Removing Negative Values
-        simulated_df[simulated_df < 0] = 0
-
-        simulated_df.index = simulated_df.index.to_series().dt.strftime("%Y-%m-%d")
-
-        simulated_df.index = pd.to_datetime(simulated_df.index)
-
-        simulated_df = pd.DataFrame(data=simulated_df.iloc[:, 0].values, index=simulated_df.index,
-                                    columns=['Simulated Streamflow'])
-
-        '''Get Observed Data'''
-
-        name_file = 'River {0} at {1}.csv'.format(nomRiver, nomEstacion)
-        name_file = name_file.replace(" ", "_")
-
-        url = 'https://www.hydroshare.org/resource/7c351e7627334636b659d0eeb3759b3c/data/contents/{}'.format(name_file)
-
-        s = requests.get(url, verify=False).content
-
-        df = pd.read_csv(io.StringIO(s.decode('utf-8')), index_col=0)
-        df.index = pd.to_datetime(df.index)
-
-        datesDischarge = df.index.tolist()
-        dataDischarge = df.iloc[:, 0].values
-        dataDischarge.tolist()
-
-        if isinstance(dataDischarge[0], str):
-            dataDischarge = map(float, dataDischarge)
-
-        observed_df = pd.DataFrame(data=dataDischarge, index=datesDischarge, columns=['Observed Streamflow'])
-
-        '''Get Forecasts'''
-        forecast_df = geoglows.streamflow.forecast_stats(comid, return_format='csv')
-
-        # Removing Negative Values
-        forecast_df[forecast_df < 0] = 0
-
-        '''Correct Forecast'''
-        fixed_stats = geoglows.bias.correct_forecast(forecast_df, simulated_df, observed_df)
 
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = 'attachment; filename=corrected_streamflow_forecast_{0}_{1}_{2}.csv'.format(watershed, subbasin, comid)

@@ -30,19 +30,9 @@ class HistoricalValidationToolSomalia(TethysAppBase):
                 controller='historical_validation_tool_somalia.controllers.home'
             ),
             UrlMap(
-                name='get_discharge_data',
-                url='get-discharge-data',
-                controller='historical_validation_tool_somalia.controllers.get_discharge_data'
-            ),
-            UrlMap(
-                name='get_simulated_data',
-                url='get-simulated-data',
-                controller='historical_validation_tool_somalia.controllers.get_simulated_data'
-            ),
-            UrlMap(
-                name='get_simulated_bc_data',
-                url='get-simulated-bc-data',
-                controller='historical_validation_tool_somalia.controllers.get_simulated_bc_data'
+                name='get_popup_response',
+                url='get-request-data',
+                controller='historical_validation_tool_somalia.controllers.get_popup_response'
             ),
             UrlMap(
                 name='get_hydrographs',
